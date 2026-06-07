@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dr. Pill Counter AI (Live Camera)</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #f0f4f8;
+            color: #1a202c;
+            text-align: center;
+            padding: 20px;
+        }
+        .card {
+            max-width: 550px;
+            background: white;
+            padding: 30px;
+            border-radius: 16px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.05);
+            margin: 0 auto;
+        }
+        h1 { color: #2b6cb0; margin-bottom: 8px; }
+        .subtitle { color: #718096; margin-bottom: 20px; font-size: 14px; }
+        #status { font-weight: bold; color: #dd6b20; margin: 15px 0; }
+        
+        /* Camera Box Styles */
+        .camera-container {
+            position: relative;
+            width: 100%;
+            max-width: 450px;
+            margin: 0 auto 20px auto;
+            border-radius: 12px;
+            overflow: hidden;
+            background: #000;
+            display: none;
+        }
+        video {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        
+        #count-box {
+            display: none;
+            margin-top: 20px;
+            padding: 20px;
+            background: #ebf8ff;
+            border-radius: 12px;
+            border: 1px solid #bee3f8;
+        }
+        .count-number {
+            font-size: 48px;
+            font-weight: 800;
+            color: #2b6cb0;
+        }
+        
+        .btn {
+            background: #2b6cb0;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 600;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+            transition: background 0.2s;
+        }
+        .btn:hover { background: #2c5282; }
+        .btn-secondary { background: #4a5568; }
+        .btn-secondary:hover { background: #2d3748; }
+        .btn-success { background: #38a169; }
+        .btn-success:hover { background: #2f855a; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h1>Pill Counter AI</h1>
+    <p class="subtitle">Private browser-based camera app. No data leaves this device.</p>
+    
+    <div id="status">Loading AI engine... please hold...</div>
+    
+    <!-- Action Controls -->
+    <div id="controls" style="display:none;">
+        <button class="btn" id="start-cam-btn">Open Clinic Camera</button>
+        <button class="btn btn-success" id="snap-btn" style="display:none;">Snap & Count</button>
+    </div>
+
+    <!-- Live Camera Feed Box -->
+    <div class="camera-container" id="cam-container">
+        <video id="video" autoplay playsinline></video>
+    </div>
+
+    <!-- Hidden canvas used to freeze frame data -->
+    <canvas id="canvas" style="display:none;"></canvas>
+
+    <div id="count-box">
+        <p style="margin:0; font-weight:600; color:#4a5568;">Pills Detected on Plate:</p>
+        <div class="count-number" id="pill-count">0</div>
+    </div>
+</div>
+
+<script type="module">
+    // Load the Hugging Face engine directly 
+    import { pipeline } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.1';
+
+    let detector;
+    let localStream = null;
+
+    const statusDiv = document.getElementById('status');
+    const controlsDiv = document.getElementById('controls');
+    const startCamBtn = document.getElementById('start-cam-btn');
+    const snapBtn = document.getElementById('snap-btn');
+    const camContainer = document.getElementById('cam-container');
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const countBox = document.getElementById('count-box');
+    const pillCount = document.getElementById('pill-count');
+
+    // 1. Boot up the local browser AI
+    async function initAI() {
+        try {
+            detector = await pipeline('object-detection', 'Xenova/detr-resnet-50');
+            statusDiv.innerText = "AI Loaded! Ready to use camera.";
+            statusDiv.style.color = "#38a169";
+            controlsDiv.style.display = "block";
+        } catch (error) {
+            statusDiv.innerText = "Error initializing the AI model locally.";
+            console.error(error);
+        }
+    }
+    initAI();
+
+    // 2. Stream user's back camera live onto the screen
+    startCamBtn.addEventListener('click', async () => {
+        countBox.style.display = "none";
+        try {
+            // "environment" tells phones to try using the back camera automatically instead of the selfie cam
+            const constraints = {
+                video: { facingMode: "environment" },
+                audio: false
+            };
+            
+            localStream = await navigator.mediaDevices.getUserMedia(constraints);
+            video.srcObject = localStream;
+            
+            camContainer.style.display = "block";
+            snapBtn.style.display = "inline-block";
+            startCamBtn.innerText = "Reset Camera";
+            startCamBtn.classList.add('btn-secondary');
+            statusDiv.innerText = "Live feed active. Aim at the pill plate!";
+            statusDiv.style.color = "#2b6cb0";
+        } catch (err) {
+            statusDiv.innerText = "Camera permission denied or not found.";
+            console.error(err);
+        }
+    });
+
+    // 3. Freeze frame from video, feed it to AI, and count!
+    snapBtn.addEventListener('click', async () => {
+        if (!localStream) return;
+
+        statusDiv.innerText = "Processing image snapshot...";
+        statusDiv.style.color = "#dd6b20";
+        countBox.style.display = "none";
+
+        // Match sizing coordinates
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        
+        // Snap the current frame onto our hidden virtual drawing board
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        
+        // Export the snapshot as an internal data link
+        const imageDataUrl = canvas.toDataURL('image/jpeg');
+
+        // Run the object detector immediately over the snapped shot
+        const output = await detector(imageDataUrl, {
+            threshold: 0.45 // Adjust confidence sensitivity here
+        });
+
+        // Pull total matches found
+        const totalPills = output.length;
+
+        statusDiv.innerText = "Scan Complete!";
+        statusDiv.style.color = "#38a169";
+        pillCount.innerText = totalPills;
+        countBox.style.display = "block";
+    });
+</script>
+
+</body>
+</html>
